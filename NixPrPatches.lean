@@ -37,6 +37,14 @@ def patchPrefix : String := "nixpkgs-patch-"
 def patchUrl (pr : String) : String :=
   s!"https://github.com/NixOS/nixpkgs/pull/{pr}.patch"
 
+/-- Whether the flake references the nixpkgs-patcher input, in any of the
+forms it can be written: `nixpkgs-patcher.url = "github:gepbird/nixpkgs-patcher"`,
+https urls, multiline blocks, pinned refs or revs, renamed inputs. The check
+matches the repository reference rather than the input name, so all url
+schemes and name variants are covered. -/
+def hasNixpkgsPatcher (lines : Array String) : Bool :=
+  lines.any (fun l => l.toLower.contains "gepbird/nixpkgs-patcher")
+
 /-- Whether the line (modulo indentation) starts a managed patch input block
 (`nixpkgs-patch-...`). -/
 def isPatchBlockStart (line : String) : Bool :=

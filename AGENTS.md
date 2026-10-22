@@ -10,19 +10,23 @@ A CLI app that manages nixpkgs patches in flake.nix.
 3. Check whether the PR is already merged into the nixpkgs revision locked
    in flake.lock (same check as `trim` below: github api, git fallback): if
    it is, do nothing.
-4. Check by url whether the PR is already in flake.nix: if
+4. Check that flake.nix references `gepbird/nixpkgs-patcher` (matched by the
+   repository reference, so all written forms count: `github:` shorthand,
+   https urls, multiline blocks, pinned refs/revs, renamed inputs). If not,
+   warn that the patch inputs will not be applied — but still add.
+5. Check by url whether the PR is already in flake.nix: if
    `https://github.com/NixOS/nixpkgs/pull/${PR_NUMBER}.patch` already appears
    in a `nixpkgs-patch-*` input, do nothing. Inputs under other names (e.g.
    `bcachefs-nixpkgs-patch-429126`) are not managed by this tool and are
    ignored by this check.
-5. Otherwise we need to add an input in form of
+6. Otherwise we need to add an input in form of
 ```nix
 nixpkgs-patch-${PR_NUMBER} = {
     url = "https://github.com/NixOS/nixpkgs/pull/${PR_NUMBER}.patch";
     flake = false;
 };
 ```
-6. Done
+7. Done
 
 ## Trimming merged patches: `nix-pr-patches trim`
 1. Find all `nixpkgs-patch-*` inputs in flake.nix (start and end of each block).

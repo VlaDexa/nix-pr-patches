@@ -312,12 +312,16 @@ def prMergedIntoLock (lockPath : String) (pr : Nat) : IO (Option Bool) := do
       | some rev => patchInRev (nixpkgsRef j |>.getD "master") pr rev
 
 /-- The add command's decision logic, parameterized over the merged check
-for testability: if the PR is already merged into the locked nixpkgs,
-nothing is added; otherwise the patch input (named `nixpkgs-patch-<name>`)
-is added as usual. -/
+for testability: warns when the flake does not reference nixpkgs-patcher,
+skips the add when the PR is already merged into the locked nixpkgs, and
+otherwise adds the patch input (named `nixpkgs-patch-<name>`) as usual. -/
 def addPatchCommandWith (mergedCheck : Nat → IO (Option Bool)) (flakePath : String)
     (name : String) (pr : String) : IO Unit := do
   let n := (pr.toNat?).get!
+  let lines ← IO.FS.lines flakePath
+  if !(hasNixpkgsPatcher lines) then
+    IO.eprintln (s!"warning: {flakePath} does not reference gepbird/nixpkgs-patcher," ++
+      " so patch inputs will not be applied")
   match ← mergedCheck n with
   | some true =>
     IO.println (s!"PR {n} is already merged into the locked nixpkgs, nothing to add" ++

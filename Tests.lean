@@ -378,6 +378,34 @@ def testTrimSkipsUnmanaged : IO Unit := do
   check (trimmed.contains "    bcachefs-nixpkgs-patch-429126 = {") "unmanaged input kept"
   check (!trimmed.contains "    nixpkgs-patch-12345 = {") "managed input removed"
 
+/-- The nixpkgs-patcher reference is found in all its written forms. -/
+def testHasNixpkgsPatcher : IO Unit := do
+  check (hasNixpkgsPatcher #["    nixpkgs-patcher.url = \"github:gepbird/nixpkgs-patcher\";"])
+    "shorthand github scheme"
+  check (hasNixpkgsPatcher #["    nixpkgs-patcher.url = \"https://github.com/gepbird/nixpkgs-patcher\";"])
+    "https scheme"
+  check (hasNixpkgsPatcher #["    nixpkgs-patcher.url = \"github:gepbird/nixpkgs-patcher/abc123def\";"])
+    "pinned rev"
+  check (hasNixpkgsPatcher #["    nixpkgs-patcher.url = \"github:gepbird/nixpkgs-patcher?ref=main\";"])
+    "pinned ref"
+  check (hasNixpkgsPatcher
+    #[ "    nixpkgs-patcher = {",
+       "      url = \"github:gepbird/nixpkgs-patcher\";",
+       "      inputs.nixpkgs.follows = \"nixpkgs\";",
+       "    };" ])
+    "multiline block"
+  check (hasNixpkgsPatcher #["    patcher.url = \"github:Gepbird/nixpkgs-patcher\";"])
+    "renamed input, different case"
+  check (!hasNixpkgsPatcher #[ "    nixpkgs.url = \"github:nixos/nixpkgs/nixos-unstable\";" ])
+    "absent"
+
+/-- A missing nixpkgs-patcher only warns; the patch is still added. -/
+def testAddStillAddsWithoutPatcher : IO Unit := do
+  withDummyFlake dummyFlake fun path => do
+    addPatchCommandWith (fun _ => pure none) path "12345" "12345"
+    let ls ← IO.FS.lines path
+    check (ls.contains "    nixpkgs-patch-12345 = {") "patch added despite missing patcher"
+
 def main : IO Unit := do
   testAddNewPatch
   testAlreadyPresent
@@ -399,4 +427,6 @@ def main : IO Unit := do
   testFindPatchBlocksSkipsUnmanaged
   testAddIgnoresUnmanaged
   testTrimSkipsUnmanaged
+  testHasNixpkgsPatcher
+  testAddStillAddsWithoutPatcher
   IO.println "all tests passed"
