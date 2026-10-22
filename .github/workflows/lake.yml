@@ -7,6 +7,10 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +31,11 @@ jobs:
 
       - name: Test
         run: lake test
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: .lake/build/bin/nix-pr-patches
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
