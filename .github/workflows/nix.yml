@@ -1,0 +1,26 @@
+name: Nix build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          # lean4-nix publishes its builds to the garnix cache; this keeps CI
+          # from compiling the Lean toolchain from source
+          extra_nix_config: |
+            substituters = https://cache.garnix.io
+            trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
+
+      - name: Build
+        run: nix build --print-build-logs
+
+      - name: Smoke test
+        run: ./result/bin/nix-pr-patches
