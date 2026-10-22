@@ -12,7 +12,9 @@ A CLI app that manages nixpkgs patches in flake.nix.
    it is, do nothing.
 4. Check by url whether the PR is already in flake.nix: if
    `https://github.com/NixOS/nixpkgs/pull/${PR_NUMBER}.patch` already appears
-   in flake.nix (under any input name), do nothing.
+   in a `nixpkgs-patch-*` input, do nothing. Inputs under other names (e.g.
+   `bcachefs-nixpkgs-patch-429126`) are not managed by this tool and are
+   ignored by this check.
 5. Otherwise we need to add an input in form of
 ```nix
 nixpkgs-patch-${PR_NUMBER} = {
@@ -24,6 +26,8 @@ nixpkgs-patch-${PR_NUMBER} = {
 
 ## Trimming merged patches: `nix-pr-patches trim`
 1. Find all `nixpkgs-patch-*` inputs in flake.nix (start and end of each block).
+   Inputs whose name does not start with `nixpkgs-patch` (e.g.
+   `bcachefs-nixpkgs-patch-429126`) are not managed and are never touched.
    The PR number of a block is read from its patch url (input names can be
    arbitrary), falling back to digits in the name.
 2. Read flake.lock (parsed with `Lean.Data.Json` / `FromJson` / `ToJson`) to

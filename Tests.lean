@@ -101,13 +101,15 @@ def testAlreadyPresent : IO Unit := do
     let after ← IO.FS.readFile path
     check (before == after) "file unchanged when the PR is already present"
 
-/-- Scenario 2 variant: the url is present under a different input name. -/
+/-- Scenario 2 variant: the url under an unmanaged input name (not a
+`nixpkgs-patch-*` block) does not block adding the managed input. -/
 def testAlreadyPresentUnderOtherName : IO Unit := do
   withDummyFlake dummyFlakeWithOtherName fun path => do
-    let before ← IO.FS.readFile path
     addPatchFile path "4242" "4242"
-    let after ← IO.FS.readFile path
-    check (before == after) "file unchanged when the url exists under another input name"
+    let ls ← IO.FS.lines path
+    check (ls.contains "    nixpkgs-patch-4242 = {") "managed input added despite unmanaged url"
+    check (ls.contains "    my-patch.url = \"https://github.com/NixOS/nixpkgs/pull/4242.patch\";")
+      "unmanaged input untouched"
 
 /-! # Trim tests -/
 
@@ -320,6 +322,62 @@ def testFindPatchBlocksNamed : IO Unit := do
     check (b.start == 3 && b.stop == 6) "block range"
   | _ => throw (IO.userError "expected exactly one block")
 
+/-- A flake.nix with an unmanaged patch input (name does not start with
+`nixpkgs-patch`) plus a managed one. -/
+def mixedPatchLines : Array String :=
+  #[
+    "{",
+    "  inputs = {",
+    "    bcachefs-nixpkgs-patch-429126 = {",
+    "        url = \"https://github.com/NixOS/nixpkgs/pull/429126.patch\";",
+    "        flake = false;",
+    "    };",
+    "    nixpkgs-patch-12345 = {",
+    "        url = \"https://github.com/NixOS/nixpkgs/pull/12345.patch\";",
+    "        flake = false;",
+    "    };",
+    "  };",
+    "  outputs = { ... }: { };",
+    "}"
+  ]
+
+/-- A flake.nix with only an unmanaged patch input. -/
+def unmanagedPatchLines : Array String :=
+  #[
+    "{",
+    "  inputs = {",
+    "    nixpkgs.url = \"github:NixOS/nixpkgs\";",
+    "    bcachefs-nixpkgs-patch-429126 = {",
+    "        url = \"https://github.com/NixOS/nixpkgs/pull/429126.patch\";",
+    "        flake = false;",
+    "    };",
+    "  };",
+    "  outputs = { ... }: { };",
+    "}"
+  ]
+
+/-- Only inputs whose name starts with `nixpkgs-patch` are managed. -/
+def testFindPatchBlocksSkipsUnmanaged : IO Unit := do
+  let blocks := findPatchBlocks mixedPatchLines
+  match blocks with
+  | [b] => check (b.pr == 12345) "only the managed block is found"
+  | _ => throw (IO.userError "expected exactly the managed block")
+
+/-- An unmanaged input with the same patch url does not block adding the
+managed input. -/
+def testAddIgnoresUnmanaged : IO Unit := do
+  withDummyFlake (String.intercalate "\n" unmanagedPatchLines.toList ++ "\n") fun path => do
+    addPatchFile path "429126" "429126"
+    let ls ← IO.FS.lines path
+    check (ls.contains "    nixpkgs-patch-429126 = {") "managed input added"
+    check (ls.contains "    bcachefs-nixpkgs-patch-429126 = {") "unmanaged input untouched"
+
+/-- Removing the managed blocks leaves unmanaged inputs alone. -/
+def testTrimSkipsUnmanaged : IO Unit := do
+  let trimmed := removeBlocks mixedPatchLines (findPatchBlocks mixedPatchLines)
+  check (trimmed.contains "    bcachefs-nixpkgs-patch-429126 = {") "unmanaged input kept"
+  check (!trimmed.contains "    nixpkgs-patch-12345 = {") "managed input removed"
+
 def main : IO Unit := do
   testAddNewPatch
   testAlreadyPresent
@@ -338,4 +396,7 @@ def main : IO Unit := do
   testAddWithoutLock
   testAddWithCustomName
   testFindPatchBlocksNamed
+  testFindPatchBlocksSkipsUnmanaged
+  testAddIgnoresUnmanaged
+  testTrimSkipsUnmanaged
   IO.println "all tests passed"

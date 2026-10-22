@@ -29,6 +29,57 @@ def braceCount (s : String) : Int :=
     else if c = '}' then n - 1
     else n) 0
 
+/-- The prefix of managed patch input names. Inputs whose name does not start
+with this (e.g. `bcachefs-nixpkgs-patch-429126`) are not managed by this tool. -/
+def patchPrefix : String := "nixpkgs-patch-"
+
+/-- The patch url for a PR. -/
+def patchUrl (pr : String) : String :=
+  s!"https://github.com/NixOS/nixpkgs/pull/{pr}.patch"
+
+/-- Whether the line (modulo indentation) starts a managed patch input block
+(`nixpkgs-patch-...`). -/
+def isPatchBlockStart (line : String) : Bool :=
+  let indent := leadingWhitespace line
+  let cs := line.toList
+  String.ofList (cs.drop indent.length |>.take patchPrefix.length) == patchPrefix
+
+/-- The index of the line that closes the block opened at `start`. -/
+partial def blockStopGo (lines : Array String) (i : Nat) (depth : Int) : Nat :=
+  if depth <= 0 || i + 1 >= lines.size then i
+  else
+    let depth' := depth + braceCount lines[i + 1]!
+    if depth' <= 0 then i + 1
+    else blockStopGo lines (i + 1) depth'
+
+def blockStop (lines : Array String) (start : Nat) : Nat :=
+  if start >= lines.size then start
+  else blockStopGo lines start (braceCount lines[start]!)
+
+/-- Whether any line in `start`..`stop` contains `needle`. -/
+partial def blockContainsGo (lines : Array String) (needle : String) (stop : Nat) (i : Nat) :
+    Bool :=
+  if i > stop then false
+  else if lines[i]!.contains needle then true
+  else blockContainsGo lines needle stop (i + 1)
+
+def blockContains (lines : Array String) (start stop : Nat) (needle : String) : Bool :=
+  blockContainsGo lines needle stop start
+
+/-- Whether PR `pr`'s patch url already appears in a managed `nixpkgs-patch-*`
+input block. Inputs with the same url under other names are not managed and
+are ignored. -/
+partial def patchUrlInManagedBlocksGo (url : String) (lines : Array String) (i : Nat) : Bool :=
+  if i >= lines.size then false
+  else if isPatchBlockStart lines[i]! then
+    let stop := blockStop lines i
+    if blockContains lines i stop url then true
+    else patchUrlInManagedBlocksGo url lines (stop + 1)
+  else patchUrlInManagedBlocksGo url lines (i + 1)
+
+def patchUrlInManagedBlocks (pr : String) (lines : Array String) : Bool :=
+  patchUrlInManagedBlocksGo (patchUrl pr) lines 0
+
 /-- Finds the `inputs = { ... };` section in `flake.nix`.
 
 Returns `(start, stop)`: the line index of `inputs = {` and of its
@@ -53,10 +104,6 @@ partial def findInputsSectionGo (lines : Array String) (i : Nat) (start : Option
 def findInputsSection (lines : Array String) : Option (Nat × Nat) :=
   findInputsSectionGo lines 0 none 0
 
-/-- The patch url for a PR. -/
-def patchUrl (pr : String) : String :=
-  s!"https://github.com/NixOS/nixpkgs/pull/{pr}.patch"
-
 /-- The possible outcomes of applying a patch to the lines of a flake.nix. -/
 inductive PatchResult where
   | present (url : String)
@@ -64,13 +111,14 @@ inductive PatchResult where
   | noInputs
 
 /-- Pure core of the patch-adding logic: checks by url whether PR `pr` is
-already present, and otherwise inserts the input block named
-`nixpkgs-patch-<name>`. -/
+already present in a managed `nixpkgs-patch-*` input, and otherwise inserts
+the input block named `nixpkgs-patch-<name>`. -/
 def applyPatch (name : String) (pr : String) (lines : Array String) : PatchResult :=
   let url := patchUrl pr
-  -- the PR is considered present if its patch url already appears anywhere,
-  -- regardless of the input name it is stored under
-  if lines.any (·.contains url) then
+  -- the PR is considered present only if its patch url appears in a managed
+  -- `nixpkgs-patch-*` input block; unmanaged inputs (e.g. named
+  -- `bcachefs-nixpkgs-patch-*`) with the same url do not count
+  if patchUrlInManagedBlocks pr lines then
     PatchResult.present url
   else
     match findInputsSection lines with

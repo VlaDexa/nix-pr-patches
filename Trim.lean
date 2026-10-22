@@ -46,9 +46,6 @@ structure CompareResponse where
   status : String
 deriving FromJson, ToJson, Repr, BEq, Inhabited
 
-/-- The prefix of patch input names. -/
-def patchPrefix : String := "nixpkgs-patch-"
-
 /-- The name of the input (after the `nixpkgs-patch-` prefix) if `line`
 starts a patch input block, modulo indentation. -/
 def patchNameOfLine (line : String) : Option String :=
@@ -87,18 +84,6 @@ def patchUrlPrOfLine (line : String) : Option Nat :=
     if digits.isEmpty then none
     else if String.ofList (suffix.take 6) == ".patch" then (String.ofList digits).toNat?
     else none
-
-/-- The index of the line that closes the block opened at `start`. -/
-partial def blockStopGo (lines : Array String) (i : Nat) (depth : Int) : Nat :=
-  if depth <= 0 || i + 1 >= lines.size then i
-  else
-    let depth' := depth + braceCount lines[i + 1]!
-    if depth' <= 0 then i + 1
-    else blockStopGo lines (i + 1) depth'
-
-def blockStop (lines : Array String) (start : Nat) : Nat :=
-  if start >= lines.size then start
-  else blockStopGo lines start (braceCount lines[start]!)
 
 /-- Looks for a patch url in lines `i`..`stop`. -/
 partial def blockPrFromUrl (lines : Array String) (stop : Nat) (i : Nat) : Option Nat :=
