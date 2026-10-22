@@ -16,8 +16,8 @@ jobs:
           # lean4-nix publishes its builds to the garnix cache; this keeps CI
           # from compiling the Lean toolchain from source
           extra_nix_config: |
-            substituters = https://cache.garnix.io
-            trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
+            substituters = https://cache.garnix.io https://vladexa.cachix.org
+            trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g= vladexa.cachix.org-1:ThmpOQRxh92xt3RMgUA5XOEklLhW1pLQa5lPTREozO4=
 
       - name: Build
         run: nix build --print-build-logs
