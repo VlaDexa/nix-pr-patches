@@ -5,7 +5,7 @@ testDriver = "test"
 
 [[lean_lib]]
 name = "NixPrPatches"
-roots = ["NixPrPatches"]
+roots = ["NixPrPatches", "Trim"]
 
 [[lean_exe]]
 name = "nix-pr-patches"

@@ -1,0 +1,269 @@
+import Lean.Data.Json
+import NixPrPatches
+import Trim
+
+open Lean
+
+/-! # Tests for nix-pr-patches
+
+Tests the two scenarios from AGENTS.md against dummy flake.nix contents in a
+temp directory:
+
+1. a new PR gets its input block inserted into the inputs section;
+2. a PR already present (checked by url) leaves flake.nix untouched.
+-/
+
+/-- Fails the current test with a message unless `cond` holds. -/
+def check (cond : Bool) (msg : String) : IO Unit :=
+  if cond then pure () else throw (IO.userError msg)
+
+/-- Index of the first line satisfying `p`, if any. -/
+def findLine (ls : List String) (p : String → Bool) : Option Nat :=
+  let rec go : List String → Nat → Option Nat
+    | [], _ => none
+    | l :: rest, i => if p l then some i else go rest (i + 1)
+  go ls 0
+
+/-- Dummy flake.nix without any patches. -/
+def dummyFlake : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  description = \"Test flake\";",
+      "  inputs = {",
+      "    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";",
+      "    flake-utils.url = \"github:numtide/flake-utils\";",
+      "  };",
+      "  outputs = { ... }: { };",
+      "}" ] ++ "\n"
+
+/-- Dummy flake.nix that already has a patch input for PR 12345. -/
+def dummyFlakeWithPatch : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  inputs = {",
+      "    nixpkgs.url = \"github:NixOS/nixpkgs\";",
+      "    nixpkgs-patch-12345 = {",
+      "        url = \"https://github.com/NixOS/nixpkgs/pull/12345.patch\";",
+      "        flake = false;",
+      "    };",
+      "  };",
+      "  outputs = { ... }: { };",
+      "}" ] ++ "\n"
+
+/-- Dummy flake.nix that has the patch url of PR 4242 under a different name. -/
+def dummyFlakeWithOtherName : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  inputs = {",
+      "    my-patch.url = \"https://github.com/NixOS/nixpkgs/pull/4242.patch\";",
+      "  };",
+      "  outputs = { ... }: { };",
+      "}" ] ++ "\n"
+
+/-- Runs `f` with a dummy flake.nix written to a temp directory. -/
+def withDummyFlake (content : String) (f : String → IO Unit) : IO Unit :=
+  IO.FS.withTempDir fun dir => do
+    let path := dir.toString ++ "/flake.nix"
+    IO.FS.writeFile path content
+    f path
+
+/-- Scenario 1: a new PR gets its input block inserted into the inputs section. -/
+def testAddNewPatch : IO Unit := do
+  withDummyFlake dummyFlake fun path => do
+    addPatchFile path "12345"
+    let lines ← IO.FS.lines path
+    let ls := lines.toList
+    check (ls.contains "    nixpkgs-patch-12345 = {") "patch block header with correct indent"
+    check (ls.contains "        url = \"https://github.com/NixOS/nixpkgs/pull/12345.patch\";")
+      "patch url line"
+    check (ls.contains "        flake = false;") "flake = false line"
+    check (ls.countP (·.contains "nixpkgs-patch-12345") == 1) "exactly one patch block"
+    let headerIdx := findLine ls (· = "    nixpkgs-patch-12345 = {")
+    let blockCloseIdx := findLine ls (· = "    };")
+    let sectionCloseIdx := findLine ls (· = "  };")
+    let outputsIdx := findLine ls (·.contains "outputs =")
+    match headerIdx, blockCloseIdx, sectionCloseIdx, outputsIdx with
+    | some h, some b, some s, some o =>
+      check (h < b && b < s && s < o) "block sits inside the inputs section, before outputs"
+    | _, _, _, _ =>
+      throw (IO.userError "expected lines not found")
+    -- re-adding the same PR must be a no-op
+    let before ← IO.FS.readFile path
+    addPatchFile path "12345"
+    let after ← IO.FS.readFile path
+    check (before == after) "re-adding an existing PR leaves the file unchanged"
+
+/-- Scenario 2: a PR already present (checked by url) is left alone. -/
+def testAlreadyPresent : IO Unit := do
+  withDummyFlake dummyFlakeWithPatch fun path => do
+    let before ← IO.FS.readFile path
+    addPatchFile path "12345"
+    let after ← IO.FS.readFile path
+    check (before == after) "file unchanged when the PR is already present"
+
+/-- Scenario 2 variant: the url is present under a different input name. -/
+def testAlreadyPresentUnderOtherName : IO Unit := do
+  withDummyFlake dummyFlakeWithOtherName fun path => do
+    let before ← IO.FS.readFile path
+    addPatchFile path "4242"
+    let after ← IO.FS.readFile path
+    check (before == after) "file unchanged when the url exists under another input name"
+
+/-! # Trim tests -/
+
+/-- JSON basics: escaping, integers, objects, arrays. -/
+def testJsonValues : IO Unit := do
+  match Json.parse "\"a\\nb\"" with
+  | .error e => throw (IO.userError s!"string parse failed: {e}")
+  | .ok j => match j.getStr? with
+    | .ok s => check (s == "a\nb") "string escape parsing"
+    | .error e => throw (IO.userError s!"getStr? failed: {e}")
+  match Json.parse "123" with
+  | .error e => throw (IO.userError s!"integer parse failed: {e}")
+  | .ok j => match j.getInt? with
+    | .ok n => check (n == 123) "integer parsing"
+    | .error e => throw (IO.userError s!"getInt? failed: {e}")
+  match Json.parse "{\"a\": [1, 2, {\"b\": \"x\"}]}" with
+  | .error e => throw (IO.userError s!"object parse failed: {e}")
+  | .ok j => do
+    match j.getObjVal? "a" with
+    | .error e => throw (IO.userError e)
+    | .ok v => do
+      match v.getArr? with
+      | .error e => throw (IO.userError e)
+      | .ok arr => do
+        check (arr.size == 3) "array size"
+        match arr[2]!.getObjVal? "b" with
+        | .error e => throw (IO.userError e)
+        | .ok v2 => match v2.getStr? with
+          | .ok "x" => pure ()
+          | _ => throw (IO.userError "nested lookup failed")
+
+/-- A structure with derived `FromJson`/`ToJson` instances. -/
+structure RevInfo where
+  rev : String
+deriving FromJson, ToJson, Repr, BEq, Inhabited
+
+/-- `deriving FromJson, ToJson` reads and writes structure fields by name. -/
+def testFromToJson : IO Unit := do
+  match Json.parse "{\"rev\": \"abc\"}" with
+  | .error e => throw (IO.userError s!"parse failed: {e}")
+  | .ok j =>
+    match (fromJson? j : Except String RevInfo) with
+    | .error e => throw (IO.userError s!"fromJson? failed: {e}")
+    | .ok r => check (r.rev == "abc") "fromJson? on structure"
+  let j := toJson { rev := "def" : RevInfo }
+  match j.getObjVal? "rev" with
+  | .error e => throw (IO.userError s!"toJson field missing: {e}")
+  | .ok v => match v.getStr? with
+    | .ok "def" => pure ()
+    | _ => throw (IO.userError "toJson roundtrip failed")
+
+/-- A flake.nix with two patch blocks. -/
+def twoPatchLines : Array String :=
+  #[
+    "{",
+    "  inputs = {",
+    "    nixpkgs.url = \"github:NixOS/nixpkgs\";",
+    "    nixpkgs-patch-12345 = {",
+    "        url = \"https://github.com/NixOS/nixpkgs/pull/12345.patch\";",
+    "        flake = false;",
+    "    };",
+    "    nixpkgs-patch-999 = {",
+    "        url = \"https://github.com/NixOS/nixpkgs/pull/999.patch\";",
+    "        flake = false;",
+    "    };",
+    "  };",
+    "  outputs = { ... }: { };",
+    "}"
+  ]
+
+/-- Patch blocks are found with the right PR numbers and line ranges. -/
+def testFindPatchBlocks : IO Unit := do
+  let blocks := findPatchBlocks twoPatchLines
+  check (blocks.length == 2) "two blocks found"
+  match blocks with
+  | [b1, b2] =>
+    check (b1.pr == 12345 && b1.start == 3 && b1.stop == 6) "first block range"
+    check (b2.pr == 999 && b2.start == 7 && b2.stop == 10) "second block range"
+  | _ => throw (IO.userError "wrong number of blocks")
+
+/-- Removing the blocks leaves the rest of the file intact. -/
+def testRemoveBlocks : IO Unit := do
+  let remaining := removeBlocks twoPatchLines (findPatchBlocks twoPatchLines)
+  check (!remaining.any (·.contains "nixpkgs-patch-")) "no patch blocks remain"
+  check (remaining.size == 6) "8 lines removed (2 blocks x 4)"
+  check (remaining.contains "    nixpkgs.url = \"github:NixOS/nixpkgs\";") "other input kept"
+  check (remaining.contains "  };") "inputs section close preserved"
+  check (remaining.any (·.contains "outputs =")) "outputs preserved"
+
+/-- Removing nothing leaves the lines unchanged. -/
+def testRemoveBlocksNoop : IO Unit := do
+  check (removeBlocks twoPatchLines [] == twoPatchLines) "no blocks -> unchanged"
+
+/-- A minimal flake.lock. -/
+def dummyLock : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  \"nodes\": {",
+      "    \"nixpkgs\": {",
+      "      \"locked\": {",
+      "        \"owner\": \"nixos\",",
+      "        \"repo\": \"nixpkgs\",",
+      "        \"rev\": \"1306659b587dc277866c7b69eb97e5f07864d8c4\",",
+      "        \"type\": \"github\"",
+      "      },",
+      "      \"original\": {",
+      "        \"ref\": \"nixos-unstable\",",
+      "        \"repo\": \"nixpkgs\",",
+      "        \"type\": \"github\"",
+      "      }",
+      "    }",
+      "  },",
+      "  \"root\": \"root\",",
+      "  \"version\": 7",
+      "}" ] ++ "\n"
+
+/-- The locked nixpkgs rev is extracted from flake.lock. -/
+def testNixpkgsRev : IO Unit := do
+  match Json.parse dummyLock with
+  | .error e => throw (IO.userError s!"lock parse failed: {e}")
+  | .ok j =>
+    match nixpkgsRev j with
+    | some rev => check (rev == "1306659b587dc277866c7b69eb97e5f07864d8c4") "rev extracted"
+    | none => throw (IO.userError "rev not found")
+    match nixpkgsRef j with
+    | some ref => check (ref == "nixos-unstable") "ref extracted"
+    | none => throw (IO.userError "ref not found")
+
+/-- Pulls responses are classified into merged/open. -/
+def testMergedInfo : IO Unit := do
+  let merged := "{ \"merged_at\": \"2024-05-01T10:00:00Z\", \"merge_commit_sha\": \"abc123\", \"state\": \"closed\" }"
+  let openPr := "{ \"merged_at\": null, \"merge_commit_sha\": null, \"state\": \"open\" }"
+  match Json.parse merged, Json.parse openPr with
+  | .ok jm, .ok jo =>
+    check (mergedInfoOf jm == some (true, some "abc123")) "merged info"
+    check (mergedInfoOf jo == some (false, none)) "open info"
+  | _, _ => throw (IO.userError "pulls json parse failed")
+
+/-- Compare statuses map to trim decisions. -/
+def testCompareStatusTrimmed : IO Unit := do
+  check (compareStatusTrimmed "ahead" == some true) "ahead -> trim"
+  check (compareStatusTrimmed "identical" == some true) "identical -> trim"
+  check (compareStatusTrimmed "behind" == some false) "behind -> keep"
+  check (compareStatusTrimmed "diverged" == some false) "diverged -> keep"
+  check (compareStatusTrimmed "unknown" == none) "unknown -> none"
+
+def main : IO Unit := do
+  testAddNewPatch
+  testAlreadyPresent
+  testAlreadyPresentUnderOtherName
+  testJsonValues
+  testFromToJson
+  testFindPatchBlocks
+  testRemoveBlocks
+  testRemoveBlocksNoop
+  testNixpkgsRev
+  testMergedInfo
+  testCompareStatusTrimmed
+  IO.println "all tests passed"

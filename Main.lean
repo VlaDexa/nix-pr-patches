@@ -1,15 +1,17 @@
 import NixPrPatches
+import Trim
 
 /-! # nix-pr-patches
 
-A tiny CLI that adds a `nixpkgs-patch-<PR>` input to the `inputs` section
-of `flake.nix` in the current directory.
+A tiny CLI that manages nixpkgs PR patch inputs in flake.nix:
 
-usage: nix-pr-patches <PR_NUMBER>
+  nix-pr-patches <PR_NUMBER>   add a patch input for the PR
+  nix-pr-patches trim          remove patch inputs whose PRs were merged
 -/
 
 def main (args : List String) : IO Unit :=
   match args with
+  | ["trim"] => trimPatches "flake.nix" "flake.lock"
   | [pr] =>
     if pr = "" || !(pr.toList.all Char.isDigit) then
       IO.eprintln usage
