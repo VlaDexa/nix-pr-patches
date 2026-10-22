@@ -5,17 +5,20 @@ A CLI app that manages nixpkgs patches in flake.nix.
 ## Adding a patch: `nix-pr-patches <PR_NUMBER>`
 1. We need to find inputs and find their start and end.
 2. First cli argument should be a number that represents the github PR number.
-3. Before adding, check by url whether the PR is already in flake.nix: if
+3. Check whether the PR is already merged into the nixpkgs revision locked
+   in flake.lock (same check as `trim` below: github api, git fallback): if
+   it is, do nothing.
+4. Check by url whether the PR is already in flake.nix: if
    `https://github.com/NixOS/nixpkgs/pull/${PR_NUMBER}.patch` already appears
    in flake.nix (under any input name), do nothing.
-4. Otherwise we need to add an input in form of
+5. Otherwise we need to add an input in form of
 ```nix
 nixpkgs-patch-${PR_NUMBER} = {
     url = "https://github.com/NixOS/nixpkgs/pull/${PR_NUMBER}.patch";
     flake = false;
 };
 ```
-5. Done
+6. Done
 
 ## Trimming merged patches: `nix-pr-patches trim`
 1. Find all `nixpkgs-patch-*` inputs in flake.nix (start and end of each block).

@@ -253,6 +253,46 @@ def patchInRev (ref : String) (pr : Nat) (rev : String) : IO (Option Bool) := do
       IO.eprintln "  falling back to git..."
       gitAncestor ref rev m
 
+/-- Whether PR `pr` is merged into the nixpkgs revision locked in `lockPath`:
+`some true`/`some false`, or `none` when it could not be determined
+(e.g. the lock is missing, unparseable, or the check failed). -/
+def prMergedIntoLock (lockPath : String) (pr : Nat) : IO (Option Bool) := do
+  let content ←
+    try some <$> IO.FS.readFile lockPath
+    catch _ => pure none
+  match content with
+  | none => do
+    IO.eprintln s!"warning: no {lockPath}, skipping merged check"
+    pure none
+  | some c =>
+    match Json.parse c with
+    | .error e => do
+      IO.eprintln s!"warning: could not parse {lockPath}: {e}, skipping merged check"
+      pure none
+    | .ok j =>
+      match nixpkgsRev j with
+      | none => do
+        IO.eprintln s!"warning: no locked nixpkgs revision in {lockPath}, skipping merged check"
+        pure none
+      | some rev => patchInRev (nixpkgsRef j |>.getD "master") pr rev
+
+/-- The add command's decision logic, parameterized over the merged check
+for testability: if the PR is already merged into the locked nixpkgs,
+nothing is added; otherwise the patch input is added as usual. -/
+def addPatchCommandWith (mergedCheck : Nat → IO (Option Bool)) (flakePath : String)
+    (pr : String) : IO Unit := do
+  let n := (pr.toNat?).get!
+  match ← mergedCheck n with
+  | some true =>
+    IO.println (s!"PR {n} is already merged into the locked nixpkgs, nothing to add" ++
+      " (run `nix-pr-patches trim` to clean up existing patch inputs)")
+  | _ => addPatchFile flakePath pr
+
+/-- Adds a patch input for `pr` to `flakePath`, unless the PR is already
+merged into the nixpkgs revision locked in `lockPath`. -/
+def addPatchCommand (flakePath lockPath : String) (pr : String) : IO Unit :=
+  addPatchCommandWith (fun n => prMergedIntoLock lockPath n) flakePath pr
+
 /-- Removes patch inputs whose PRs are merged into the locked nixpkgs
 revision. -/
 def trimPatches (flakePath lockPath : String) : IO Unit := do

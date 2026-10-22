@@ -16,7 +16,7 @@ def main (args : List String) : IO Unit :=
     if pr = "" || !(pr.toList.all Char.isDigit) then
       IO.eprintln usage
     else
-      try addPatchFile "flake.nix" pr
-      catch e => IO.eprintln s!"error: could not read flake.nix: {e}"
+      try addPatchCommand "flake.nix" "flake.lock" pr
+      catch e => IO.eprintln s!"error: {e}"
   | _ =>
     IO.eprintln usage

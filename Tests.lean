@@ -254,6 +254,36 @@ def testCompareStatusTrimmed : IO Unit := do
   check (compareStatusTrimmed "diverged" == some false) "diverged -> keep"
   check (compareStatusTrimmed "unknown" == none) "unknown -> none"
 
+/-- The add command adds nothing when the PR is reported as merged. -/
+def testAddSkipsWhenMerged : IO Unit := do
+  withDummyFlake dummyFlake fun path => do
+    addPatchCommandWith (fun _ => pure (some true)) path "12345"
+    let after ← IO.FS.readFile path
+    check (after == dummyFlake) "nothing added when the PR is already merged"
+
+/-- The add command adds the input when the PR is not merged. -/
+def testAddWhenNotMerged : IO Unit := do
+  withDummyFlake dummyFlake fun path => do
+    addPatchCommandWith (fun _ => pure (some false)) path "12345"
+    let ls ← IO.FS.lines path
+    check (ls.any (·.contains "nixpkgs-patch-12345 = {")) "patch added when the PR is not merged"
+
+/-- Undetermined merge status falls through to adding. -/
+def testAddWhenUnknown : IO Unit := do
+  withDummyFlake dummyFlake fun path => do
+    addPatchCommandWith (fun _ => pure none) path "12345"
+    let ls ← IO.FS.lines path
+    check (ls.any (·.contains "nixpkgs-patch-12345 = {")) "patch added when status is undetermined"
+
+/-- Without a flake.lock the merged check is skipped and the patch is added. -/
+def testAddWithoutLock : IO Unit := do
+  IO.FS.withTempDir fun dir => do
+    let path := dir.toString ++ "/flake.nix"
+    IO.FS.writeFile path dummyFlake
+    addPatchCommand path (dir.toString ++ "/flake.lock") "12345"
+    let ls ← IO.FS.lines path
+    check (ls.any (·.contains "nixpkgs-patch-12345 = {")) "patch added without a flake.lock"
+
 def main : IO Unit := do
   testAddNewPatch
   testAlreadyPresent
@@ -266,4 +296,8 @@ def main : IO Unit := do
   testNixpkgsRev
   testMergedInfo
   testCompareStatusTrimmed
+  testAddSkipsWhenMerged
+  testAddWhenNotMerged
+  testAddWhenUnknown
+  testAddWithoutLock
   IO.println "all tests passed"
