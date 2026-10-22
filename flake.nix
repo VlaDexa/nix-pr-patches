@@ -34,7 +34,7 @@
         packages.default =
           (pkgs.lean.buildLeanPackage {
             name = "nix-pr-patches";
-            roots = ["Main"];
+            roots = ["Main" "NixPrPatches" "Trim"];
             src = pkgs.lib.cleanSource ./.;
           })
           .executable;
