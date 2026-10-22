@@ -27,3 +27,9 @@ jobs:
 
       - name: Test
         run: lake test
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-pr-patches-linux-x86_64
+          path: .lake/build/bin/nix-pr-patches
