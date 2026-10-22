@@ -70,7 +70,7 @@ def withDummyFlake (content : String) (f : String → IO Unit) : IO Unit :=
 /-- Scenario 1: a new PR gets its input block inserted into the inputs section. -/
 def testAddNewPatch : IO Unit := do
   withDummyFlake dummyFlake fun path => do
-    addPatchFile path "12345"
+    addPatchFile path "12345" "12345"
     let lines ← IO.FS.lines path
     let ls := lines.toList
     check (ls.contains "    nixpkgs-patch-12345 = {") "patch block header with correct indent"
@@ -89,7 +89,7 @@ def testAddNewPatch : IO Unit := do
       throw (IO.userError "expected lines not found")
     -- re-adding the same PR must be a no-op
     let before ← IO.FS.readFile path
-    addPatchFile path "12345"
+    addPatchFile path "12345" "12345"
     let after ← IO.FS.readFile path
     check (before == after) "re-adding an existing PR leaves the file unchanged"
 
@@ -97,7 +97,7 @@ def testAddNewPatch : IO Unit := do
 def testAlreadyPresent : IO Unit := do
   withDummyFlake dummyFlakeWithPatch fun path => do
     let before ← IO.FS.readFile path
-    addPatchFile path "12345"
+    addPatchFile path "12345" "12345"
     let after ← IO.FS.readFile path
     check (before == after) "file unchanged when the PR is already present"
 
@@ -105,7 +105,7 @@ def testAlreadyPresent : IO Unit := do
 def testAlreadyPresentUnderOtherName : IO Unit := do
   withDummyFlake dummyFlakeWithOtherName fun path => do
     let before ← IO.FS.readFile path
-    addPatchFile path "4242"
+    addPatchFile path "4242" "4242"
     let after ← IO.FS.readFile path
     check (before == after) "file unchanged when the url exists under another input name"
 
@@ -184,7 +184,8 @@ def testFindPatchBlocks : IO Unit := do
   check (blocks.length == 2) "two blocks found"
   match blocks with
   | [b1, b2] =>
-    check (b1.pr == 12345 && b1.start == 3 && b1.stop == 6) "first block range"
+    check (b1.name == "nixpkgs-patch-12345" && b1.pr == 12345 && b1.start == 3 && b1.stop == 6)
+      "first block range"
     check (b2.pr == 999 && b2.start == 7 && b2.stop == 10) "second block range"
   | _ => throw (IO.userError "wrong number of blocks")
 
@@ -257,21 +258,21 @@ def testCompareStatusTrimmed : IO Unit := do
 /-- The add command adds nothing when the PR is reported as merged. -/
 def testAddSkipsWhenMerged : IO Unit := do
   withDummyFlake dummyFlake fun path => do
-    addPatchCommandWith (fun _ => pure (some true)) path "12345"
+    addPatchCommandWith (fun _ => pure (some true)) path "12345" "12345"
     let after ← IO.FS.readFile path
     check (after == dummyFlake) "nothing added when the PR is already merged"
 
 /-- The add command adds the input when the PR is not merged. -/
 def testAddWhenNotMerged : IO Unit := do
   withDummyFlake dummyFlake fun path => do
-    addPatchCommandWith (fun _ => pure (some false)) path "12345"
+    addPatchCommandWith (fun _ => pure (some false)) path "12345" "12345"
     let ls ← IO.FS.lines path
     check (ls.any (·.contains "nixpkgs-patch-12345 = {")) "patch added when the PR is not merged"
 
 /-- Undetermined merge status falls through to adding. -/
 def testAddWhenUnknown : IO Unit := do
   withDummyFlake dummyFlake fun path => do
-    addPatchCommandWith (fun _ => pure none) path "12345"
+    addPatchCommandWith (fun _ => pure none) path "12345" "12345"
     let ls ← IO.FS.lines path
     check (ls.any (·.contains "nixpkgs-patch-12345 = {")) "patch added when status is undetermined"
 
@@ -280,9 +281,44 @@ def testAddWithoutLock : IO Unit := do
   IO.FS.withTempDir fun dir => do
     let path := dir.toString ++ "/flake.nix"
     IO.FS.writeFile path dummyFlake
-    addPatchCommand path (dir.toString ++ "/flake.lock") "12345"
+    addPatchCommand path (dir.toString ++ "/flake.lock") "12345" "12345"
     let ls ← IO.FS.lines path
     check (ls.any (·.contains "nixpkgs-patch-12345 = {")) "patch added without a flake.lock"
+
+/-- A custom-named patch input is added with the given name but the PR's url. -/
+def testAddWithCustomName : IO Unit := do
+  withDummyFlake dummyFlake fun path => do
+    addPatchFile path "bump-libfoo" "12345"
+    let ls ← IO.FS.lines path
+    check (ls.contains "    nixpkgs-patch-bump-libfoo = {") "custom-named block header"
+    check (ls.contains "        url = \"https://github.com/NixOS/nixpkgs/pull/12345.patch\";")
+      "url still points at the PR"
+    check (!ls.any (·.contains "nixpkgs-patch-12345")) "no default-named block"
+
+/-- A flake.nix with a custom-named patch input. -/
+def namedPatchLines : Array String :=
+  #[
+    "{",
+    "  inputs = {",
+    "    nixpkgs.url = \"github:NixOS/nixpkgs\";",
+    "    nixpkgs-patch-bump-libfoo = {",
+    "        url = \"https://github.com/NixOS/nixpkgs/pull/777.patch\";",
+    "        flake = false;",
+    "    };",
+    "  };",
+    "  outputs = { ... }: { };",
+    "}"
+  ]
+
+/-- Trim finds the PR number of custom-named inputs from their patch url. -/
+def testFindPatchBlocksNamed : IO Unit := do
+  let blocks := findPatchBlocks namedPatchLines
+  match blocks with
+  | [b] =>
+    check (b.name == "nixpkgs-patch-bump-libfoo") "custom name kept"
+    check (b.pr == 777) "PR taken from the url, not the name"
+    check (b.start == 3 && b.stop == 6) "block range"
+  | _ => throw (IO.userError "expected exactly one block")
 
 def main : IO Unit := do
   testAddNewPatch
@@ -300,4 +336,6 @@ def main : IO Unit := do
   testAddWhenNotMerged
   testAddWhenUnknown
   testAddWithoutLock
+  testAddWithCustomName
+  testFindPatchBlocksNamed
   IO.println "all tests passed"

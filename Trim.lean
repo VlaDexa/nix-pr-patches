@@ -25,9 +25,10 @@ JSON handling uses Lean's `Lean.Data.Json` with `FromJson`/`ToJson`.
 
 open Lean
 
-/-- A patch input block in flake.nix: its PR number and the inclusive line
-range it spans. -/
+/-- A patch input block in flake.nix: its full input name, its PR number,
+and the inclusive line range it spans. -/
 structure PatchBlock where
+  name : String
   pr : Nat
   start : Nat
   stop : Nat
@@ -48,16 +49,44 @@ deriving FromJson, ToJson, Repr, BEq, Inhabited
 /-- The prefix of patch input names. -/
 def patchPrefix : String := "nixpkgs-patch-"
 
-/-- If `line` starts a patch input block (`nixpkgs-patch-<digits> = {`,
-modulo indentation), the PR number. -/
-def patchPrOfLine (line : String) : Option Nat :=
+/-- The name of the input (after the `nixpkgs-patch-` prefix) if `line`
+starts a patch input block, modulo indentation. -/
+def patchNameOfLine (line : String) : Option String :=
   let indent := leadingWhitespace line
   let cs := line.toList
   let pfx := String.ofList (cs.drop indent.length |>.take patchPrefix.length)
   if pfx == patchPrefix then
-    let digits := String.ofList (cs.drop (indent.length + patchPrefix.length) |>.takeWhile Char.isDigit)
-    digits.toNat?
+    let rest := cs.drop (indent.length + patchPrefix.length)
+    some (String.ofList (List.takeWhile (fun c => !c.isWhitespace && c != '=' && c != '{') rest))
   else none
+
+/-- If `line` starts a patch input block, the PR number encoded in the input
+name (`nixpkgs-patch-<digits> = {`). Used as a fallback when the block has no
+patch url. -/
+def patchPrOfLine (line : String) : Option Nat :=
+  match patchNameOfLine line with
+  | none => none
+  | some rest => (String.ofList (List.takeWhile (fun c => c.isDigit) rest.toList)).toNat?
+
+/-- Extracts the PR number from a patch url line, e.g.
+`url = "https://github.com/NixOS/nixpkgs/pull/12345.patch";` gives `some 12345`. -/
+def patchUrlPrOfLine (line : String) : Option Nat :=
+  let key := "pull/".toList
+  let rec afterKey (cs : List Char) (k : List Char) : Option (List Char) :=
+    match k with
+    | [] => some cs
+    | kc :: krest =>
+      match cs with
+      | c :: crest => if c == kc then afterKey crest krest else afterKey crest key
+      | [] => none
+  match afterKey line.toList key with
+  | none => none
+  | some rest =>
+    let digits := List.takeWhile (fun c => c.isDigit) rest
+    let suffix := rest.drop digits.length
+    if digits.isEmpty then none
+    else if String.ofList (suffix.take 6) == ".patch" then (String.ofList digits).toNat?
+    else none
 
 /-- The index of the line that closes the block opened at `start`. -/
 partial def blockStopGo (lines : Array String) (i : Nat) (depth : Int) : Nat :=
@@ -71,15 +100,36 @@ def blockStop (lines : Array String) (start : Nat) : Nat :=
   if start >= lines.size then start
   else blockStopGo lines start (braceCount lines[start]!)
 
-/-- All `nixpkgs-patch-*` input blocks in `lines`, in order of appearance. -/
+/-- Looks for a patch url in lines `i`..`stop`. -/
+partial def blockPrFromUrl (lines : Array String) (stop : Nat) (i : Nat) : Option Nat :=
+  if i > stop then none
+  else
+    match patchUrlPrOfLine lines[i]! with
+    | some n => some n
+    | none => blockPrFromUrl lines stop (i + 1)
+
+/-- The PR number of the block spanning lines `start`..`stop`, taken from the
+block's patch url (custom-named inputs encode the PR there); falls back to
+digits in the input name. -/
+def blockPr (lines : Array String) (start stop : Nat) : Option Nat :=
+  match blockPrFromUrl lines stop (start + 1) with
+  | some n => some n
+  | none => patchPrOfLine lines[start]!
+
+/-- All `nixpkgs-patch-*` input blocks in `lines`, in order of appearance.
+Blocks whose PR number cannot be determined are skipped. -/
 partial def findPatchBlocksGo (lines : Array String) (i : Nat) (acc : List PatchBlock) :
     List PatchBlock :=
   if i >= lines.size then acc.reverse
   else
-    match patchPrOfLine lines[i]! with
-    | some pr =>
+    match patchNameOfLine lines[i]! with
+    | some namePart =>
       let stop := blockStop lines i
-      findPatchBlocksGo lines (stop + 1) ({ pr := pr, start := i, stop := stop } :: acc)
+      match blockPr lines i stop with
+      | some pr =>
+        findPatchBlocksGo lines (stop + 1)
+          ({ name := s!"nixpkgs-patch-{namePart}", pr := pr, start := i, stop := stop } :: acc)
+      | none => findPatchBlocksGo lines (stop + 1) acc
     | none => findPatchBlocksGo lines (i + 1) acc
 
 def findPatchBlocks (lines : Array String) : List PatchBlock :=
@@ -278,20 +328,22 @@ def prMergedIntoLock (lockPath : String) (pr : Nat) : IO (Option Bool) := do
 
 /-- The add command's decision logic, parameterized over the merged check
 for testability: if the PR is already merged into the locked nixpkgs,
-nothing is added; otherwise the patch input is added as usual. -/
+nothing is added; otherwise the patch input (named `nixpkgs-patch-<name>`)
+is added as usual. -/
 def addPatchCommandWith (mergedCheck : Nat → IO (Option Bool)) (flakePath : String)
-    (pr : String) : IO Unit := do
+    (name : String) (pr : String) : IO Unit := do
   let n := (pr.toNat?).get!
   match ← mergedCheck n with
   | some true =>
     IO.println (s!"PR {n} is already merged into the locked nixpkgs, nothing to add" ++
       " (run `nix-pr-patches trim` to clean up existing patch inputs)")
-  | _ => addPatchFile flakePath pr
+  | _ => addPatchFile flakePath name pr
 
 /-- Adds a patch input for `pr` to `flakePath`, unless the PR is already
-merged into the nixpkgs revision locked in `lockPath`. -/
-def addPatchCommand (flakePath lockPath : String) (pr : String) : IO Unit :=
-  addPatchCommandWith (fun n => prMergedIntoLock lockPath n) flakePath pr
+merged into the nixpkgs revision locked in `lockPath`. The input is named
+`nixpkgs-patch-<name>`. -/
+def addPatchCommand (flakePath lockPath : String) (name : String) (pr : String) : IO Unit :=
+  addPatchCommandWith (fun n => prMergedIntoLock lockPath n) flakePath name pr
 
 /-- Removes patch inputs whose PRs are merged into the locked nixpkgs
 revision. -/
@@ -324,12 +376,12 @@ def trimPatches (flakePath lockPath : String) : IO Unit := do
           let r ← patchInRev ref b.pr rev
           match r with
           | none => do
-            IO.println s!"  keeping nixpkgs-patch-{b.pr} (could not determine status)"
+            IO.println s!"  keeping {b.name} (could not determine status)"
             go rest toRemove
           | some false => do
-            IO.println s!"  keeping nixpkgs-patch-{b.pr} (not merged into {rev})"
+            IO.println s!"  keeping {b.name} (not merged into {rev})"
             go rest toRemove
           | some true => do
-            IO.println s!"  removing nixpkgs-patch-{b.pr} (merged into {rev})"
+            IO.println s!"  removing {b.name} (merged into {rev})"
             go rest (b :: toRemove)
       go blocks []
