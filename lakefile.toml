@@ -1,7 +1,16 @@
-name = "Minimal"
+name = "nix-pr-patches"
 version = "0.1.0"
-defaultTargets = ["minimal"]
+defaultTargets = ["nix-pr-patches", "test"]
+testDriver = "test"
+
+[[lean_lib]]
+name = "NixPrPatches"
+roots = ["NixPrPatches"]
 
 [[lean_exe]]
-name = "minimal"
+name = "nix-pr-patches"
 root = "Main"
+
+[[lean_exe]]
+name = "test"
+root = "Tests"

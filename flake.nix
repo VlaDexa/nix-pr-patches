@@ -1,5 +1,5 @@
 {
-  description = "Lean 4 Example Project";
+  description = "CLI to add nixpkgs PR patch inputs to flake.nix";
 
   inputs = {
     nixpkgs.follows = "lean4-nix/nixpkgs";
@@ -33,7 +33,7 @@
 
         packages.default =
           (pkgs.lean.buildLeanPackage {
-            name = "Example";
+            name = "nix-pr-patches";
             roots = ["Main"];
             src = pkgs.lib.cleanSource ./.;
           })
