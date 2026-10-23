@@ -7,41 +7,47 @@
     lean4-nix.url = "github:lenianiva/lean4-nix";
   };
 
-  outputs = inputs @ {
-    nixpkgs,
-    flake-parts,
-    lean4-nix,
-    ...
-  }:
-    flake-parts.lib.mkFlake {inherit inputs;} {
+  outputs =
+    inputs@{
+      nixpkgs,
+      flake-parts,
+      lean4-nix,
+      ...
+    }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
-        "x86_64-darwin"
         "x86_64-linux"
       ];
 
-      perSystem = {
-        system,
-        pkgs,
-        ...
-      }: {
-        _module.args.pkgs = import nixpkgs {
-          inherit system;
-          overlays = [(lean4-nix.readToolchainFile ./lean-toolchain)];
-        };
+      perSystem =
+        {
+          system,
+          pkgs,
+          ...
+        }:
+        let
+          lake2nix = pkgs.callPackage lean4-nix.lake { };
+        in
+        {
+          _module.args.pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (lean4-nix.readToolchainFile ./lean-toolchain) ];
+          };
 
-        packages.default =
-          (pkgs.lean.buildLeanPackage {
+          packages.default = lake2nix.mkPackage {
             name = "nix-pr-patches";
-            roots = ["Main" "NixPrPatches" "Trim"];
-            src = pkgs.lib.cleanSource ./.;
-          })
-          .executable;
+            src = ./.;
+            propagatedBuildInputs = [
+              pkgs.curl
+              pkgs.git
+            ];
+          };
 
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs.lean; [lean-all];
+          devShells.default = pkgs.mkShell {
+            packages = with pkgs.lean; [ lean-all ];
+          };
         };
-      };
     };
 }

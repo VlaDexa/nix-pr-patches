@@ -406,6 +406,11 @@ def testAddStillAddsWithoutPatcher : IO Unit := do
     let ls ← IO.FS.lines path
     check (ls.contains "    nixpkgs-patch-12345 = {") "patch added despite missing patcher"
 
+/-- A tool is on `PATH` when it is there, and not otherwise. -/
+def testIsOnPath : IO Unit := do
+  check (← isOnPath "sh") "sh found on PATH"
+  check (!(← isOnPath "nix-pr-patches-no-such-tool")) "missing tool not found on PATH"
+
 def main : IO Unit := do
   testAddNewPatch
   testAlreadyPresent
@@ -429,4 +434,5 @@ def main : IO Unit := do
   testTrimSkipsUnmanaged
   testHasNixpkgsPatcher
   testAddStillAddsWithoutPatcher
+  testIsOnPath
   IO.println "all tests passed"

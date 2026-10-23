@@ -9,7 +9,12 @@ A tiny CLI that manages nixpkgs PR patch inputs in flake.nix:
   nix-pr-patches trim                 remove patch inputs whose PRs were merged
 -/
 
-def main (args : List String) : IO Unit :=
+def main (args : List String) : IO Unit := do
+  let missing ← missingTools
+  unless missing.isEmpty do
+    let names := ", ".intercalate missing
+    IO.eprintln s!"error: required tools not found in PATH: {names}"
+    IO.Process.exit 1
   match args with
   | ["trim"] => trimPatches "flake.nix" "flake.lock"
   | [pr] =>

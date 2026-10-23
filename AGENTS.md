@@ -2,6 +2,12 @@
 
 A CLI app that manages nixpkgs patches in flake.nix.
 
+## Startup: required tools
+1. Before any command, check that `curl` and `git` are both on `PATH` (an
+   executable of that name exists in one of its directories).
+2. If either is missing, print `error: required tools not found in PATH: ...`
+   naming the missing ones and exit with status 1 without touching any file.
+
 ## Adding a patch: `nix-pr-patches <PR_NUMBER> [NAME]`
 1. We need to find inputs and find their start and end.
 2. First cli argument should be a number that represents the github PR number.

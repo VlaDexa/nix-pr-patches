@@ -9,6 +9,18 @@ def usage : String :=
   "usage: nix-pr-patches <PR_NUMBER> [NAME]   add a patch input for the PR\n" ++
   "       nix-pr-patches trim                 remove patch inputs merged into nixpkgs"
 
+/-- External programs the tool runs; each must be on `PATH`. -/
+def requiredTools : List String := ["curl", "git"]
+
+/-- Whether an executable named `tool` is in one of the `PATH` directories. -/
+def isOnPath (tool : String) : IO Bool := do
+  let path := (← IO.getEnv "PATH").getD ""
+  (path.splitOn ":").anyM fun dir => (System.FilePath.mk dir / tool).pathExists
+
+/-- The entries of `requiredTools` that are not on `PATH`. -/
+def missingTools : IO (List String) :=
+  requiredTools.filterM fun tool => not <$> isOnPath tool
+
 /-- The leading whitespace of a line, used to keep indentation consistent. -/
 def leadingWhitespace (s : String) : String :=
   String.ofList (s.toList.takeWhile fun c => c = ' ' || c = '\t')
