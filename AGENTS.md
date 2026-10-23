@@ -3,10 +3,12 @@
 A CLI app that manages nixpkgs patches in flake.nix.
 
 ## Startup: required tools
-1. Before any command, check that `curl` and `git` are both on `PATH` (an
-   executable of that name exists in one of its directories).
-2. If either is missing, print `error: required tools not found in PATH: ...`
-   naming the missing ones and exit with status 1 without touching any file.
+1. Before any command, check that `curl` is on `PATH` (an executable of that
+   name exists in one of its directories).
+2. If it is missing, print `error: required tool not found in PATH: curl` and
+   exit with status 1 without touching any file.
+3. `git` is only the fallback for the merged check, so it is not checked here;
+   the git fallback checks for it when it runs (see trim step 4).
 
 ## Adding a patch: `nix-pr-patches <PR_NUMBER> [NAME]`
 1. We need to find inputs and find their start and end.
@@ -53,7 +55,8 @@ nixpkgs-patch-${PR_NUMBER} = {
    (`--filter=tree:0`, no trees or blobs), kept at
    `$XDG_CACHE_HOME/nix-pr-patches/nixpkgs` (override with
    `NIX_PR_PATCHES_NIXPKGS_REPO`), updated incrementally each run, queried
-   with `git merge-base --is-ancestor`. No whole-nixpkgs download.
+   with `git merge-base --is-ancestor`. No whole-nixpkgs download. If `git`
+   is not on `PATH`, warn and leave the status undetermined.
 5. Remove the inputs whose PRs were merged into the locked revision. Keep
    anything whose status could not be determined. Afterwards run
    `nix flake lock` to clean up flake.lock.

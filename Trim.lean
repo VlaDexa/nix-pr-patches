@@ -252,6 +252,9 @@ def ensureNixpkgsRepo (ref : String) : IO (Except String String) := do
 /-- git fallback, nixpk.gs-style: is merge commit `m` an ancestor of `rev`?
 The ancestry query is answered from the persistent commit-graph repo. -/
 def gitAncestor (ref rev m : String) : IO (Option Bool) := do
+  unless (← isOnPath "git") do
+    IO.eprintln "  warning: git is not on PATH, skipping the git fallback"
+    return none
   match ← ensureNixpkgsRepo ref with
   | .error e => do
     IO.eprintln s!"  warning: git fallback failed: {e}"

@@ -10,10 +10,8 @@ A tiny CLI that manages nixpkgs PR patch inputs in flake.nix:
 -/
 
 def main (args : List String) : IO Unit := do
-  let missing ← missingTools
-  unless missing.isEmpty do
-    let names := ", ".intercalate missing
-    IO.eprintln s!"error: required tools not found in PATH: {names}"
+  unless (← isOnPath "curl") do
+    IO.eprintln "error: required tool not found in PATH: curl"
     IO.Process.exit 1
   match args with
   | ["trim"] => trimPatches "flake.nix" "flake.lock"
