@@ -7,6 +7,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -22,3 +26,8 @@ jobs:
 
       - name: Smoke test
         run: ./result/bin/nix-pr-patches
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: result/bin/nix-pr-patches
