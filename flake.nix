@@ -43,6 +43,7 @@
               pkgs.curl
               pkgs.git
             ];
+            installArtifacts = false;
           };
 
           devShells.default = pkgs.mkShell {
