@@ -4,7 +4,11 @@ import NixPrPatches
 /-! # Trimming merged patches
 
 `nix-pr-patches trim` removes `nixpkgs-patch-<PR>` inputs whose PR has been
-merged into the nixpkgs revision locked in `flake.lock`.
+merged into the nixpkgs revision locked in `flake.lock`. The nixpkgs node is
+looked up among the root flake's own inputs (`nodes.root.inputs`) only, so a
+transitive dependency named `nixpkgs` is never mistaken for the flake's
+nixpkgs; when several root inputs lock NixOS/nixpkgs, the input literally
+named `nixpkgs` wins.
 
 Determining whether a PR is contained in a revision is done via the public
 GitHub API when possible:
@@ -131,26 +135,106 @@ def removeBlocks (lines : Array String) (blocks : List PatchBlock) : Array Strin
       kept ++ go restLs (b.stop + 1) rest
   (go lines.toList 0 blocks).toArray
 
-/-- The locked nixpkgs revision from a parsed flake.lock, if present. -/
-def nixpkgsRev (lock : Json) : Option String :=
-  (do
-    let nodes ← lock.getObjVal? "nodes"
-    let np ← nodes.getObjVal? "nixpkgs"
-    let locked ← np.getObjVal? "locked"
-    let rev ← locked.getObjVal? "rev"
-    rev.getStr?
-  ).toOption
+/-- The string value of `field` in a json object, if any. -/
+def objStr (j : Json) (field : String) : Option String :=
+  match j.getObjVal? field with
+  | .error _ => none
+  | .ok v => v.getStr?.toOption
 
-/-- The nixpkgs ref from a parsed flake.lock (e.g. `nixos-unstable`),
-if present. -/
-def nixpkgsRef (lock : Json) : Option String :=
-  (do
+/-- The root flake's inputs from flake.lock: `(inputName, nodeName)` pairs.
+Lock format version 7 records them as an object mapping each input name to
+its node name (they can differ when a node was renamed); older formats use
+an array of names, where node name = input name. Falls back to
+`[("nixpkgs", "nixpkgs")]` when the lock does not record root inputs at all
+(old-style locks). -/
+def rootInputs (lock : Json) : List (String × String) :=
+  let pairs := (do
     let nodes ← lock.getObjVal? "nodes"
-    let np ← nodes.getObjVal? "nixpkgs"
-    let orig ← np.getObjVal? "original"
-    let ref ← orig.getObjVal? "ref"
-    ref.getStr?
-  ).toOption
+    let root ← nodes.getObjVal? "root"
+    let inputs ← root.getObjVal? "inputs"
+    match inputs.getObj? with
+    | .ok obj =>
+      pure (obj.toList.map fun (k, v) => (k, ((v : Json).getStr?.toOption).getD k))
+    | .error _ =>
+      match inputs.getArr? with
+      | .ok arr =>
+        pure (arr.toList.foldr
+          (fun (j : Json) acc => match j.getStr?.toOption with | some s => (s, s) :: acc | none => acc)
+          [])
+      | .error _ => pure [])
+  pairs.toOption.getD [("nixpkgs", "nixpkgs")]
+
+/-- Whether a locked node is a NixOS/nixpkgs input: its `locked` (or, when
+that has no repo info, `original`) records `repo = "nixpkgs"` with a nixos
+owner, or the input's url points at `github.com/NixOS/nixpkgs` (covers
+`git`-type inputs, which record no owner/repo). Forks and unrelated repos
+do not qualify. -/
+def isNixpkgsNode (node : Json) : Bool :=
+  let locked := (node.getObjVal? "locked").toOption.getD Json.null
+  let orig := (node.getObjVal? "original").toOption.getD Json.null
+  let repo := (objStr locked "repo").orElse (fun _ => objStr orig "repo")
+  let owner := (objStr locked "owner").orElse (fun _ => objStr orig "owner")
+  let url := (objStr locked "url").orElse (fun _ => objStr orig "url")
+  let repoOk := repo == some "nixpkgs" && (owner.map String.toLower |>.getD "nixos") == "nixos"
+  let urlOk := (url.map String.toLower |>.getD "").contains "github.com/nixos/nixpkgs"
+  repoOk || urlOk
+
+/-- The root flake's nixpkgs input in flake.lock: the input listed in
+`nodes.root.inputs` whose node locks NixOS/nixpkgs. Inputs that are not root
+inputs are ignored (e.g. a transitive dependency named `nixpkgs`); when
+several root inputs qualify, the one literally named `nixpkgs` is preferred.
+Returns `(inputName, node)` or `none` when the root flake has no nixpkgs
+input. -/
+def nixpkgsNode (lock : Json) : Option (String × Json) :=
+  match lock.getObjVal? "nodes" with
+  | .error _ => none
+  | .ok nodes =>
+    let candidates :=
+      (rootInputs lock).foldr (fun (name, nodeName) acc =>
+        match nodes.getObjVal? nodeName with
+        | .error _ => acc
+        | .ok node => if isNixpkgsNode node then (name, node) :: acc else acc) []
+    match candidates.find? (fun p => p.1 == "nixpkgs") with
+    | some c => some c
+    | none => candidates.head?
+
+/-- The names of the root flake's nixpkgs inputs, in lock order. -/
+def nixpkgsInputNames (lock : Json) : List String :=
+  match lock.getObjVal? "nodes" with
+  | .error _ => []
+  | .ok nodes =>
+    (rootInputs lock).foldr (fun (name, nodeName) acc =>
+      match nodes.getObjVal? nodeName with
+      | .error _ => acc
+      | .ok node => if isNixpkgsNode node then name :: acc else acc) []
+
+/-- Warns when the root flake has several nixpkgs inputs and the tool is
+using `name`. -/
+def warnMultipleNixpkgs (lock : Json) (name : String) : IO Unit := do
+  let names := nixpkgsInputNames lock
+  if names.length > 1 then
+    IO.eprintln (s!"  warning: {names.length} nixpkgs inputs in the lock" ++
+      s!" ({String.intercalate ", " names}); using {name}")
+
+/-- The locked nixpkgs revision from a parsed flake.lock, if the root flake
+has a nixpkgs input. -/
+def nixpkgsRev (lock : Json) : Option String :=
+  match nixpkgsNode lock with
+  | none => none
+  | some (_, node) =>
+    match node.getObjVal? "locked" with
+    | .error _ => none
+    | .ok locked => objStr locked "rev"
+
+/-- The nixpkgs ref from a parsed flake.lock (e.g. `nixos-unstable`), if the
+root flake has a nixpkgs input. -/
+def nixpkgsRef (lock : Json) : Option String :=
+  match nixpkgsNode lock with
+  | none => none
+  | some (_, node) =>
+    match node.getObjVal? "original" with
+    | .error _ => none
+    | .ok orig => objStr orig "ref"
 
 /-- `(merged, merge_commit_sha)` from a `pulls/{PR}` response. -/
 def mergedInfoOf (j : Json) : Option (Bool × Option String) :=
@@ -312,7 +396,10 @@ def prMergedIntoLock (lockPath : String) (pr : Nat) : IO (Option Bool) := do
       | none => do
         IO.eprintln s!"warning: no locked nixpkgs revision in {lockPath}, skipping merged check"
         pure none
-      | some rev => patchInRev (nixpkgsRef j |>.getD "master") pr rev
+      | some rev => do
+        let name := (nixpkgsNode j |>.map fun p => p.1).getD "nixpkgs"
+        warnMultipleNixpkgs j name
+        patchInRev (nixpkgsRef j |>.getD "master") pr rev
 
 /-- The add command's decision logic, parameterized over the merged check
 for testability: warns when the flake does not reference nixpkgs-patcher,
@@ -353,7 +440,9 @@ def trimPatches (flakePath lockPath : String) : IO Unit := do
     | none => IO.eprintln s!"error: no locked nixpkgs revision found in {lockPath}"
     | some rev =>
       let ref := (nixpkgsRef lockJson).getD "master"
-      IO.println s!"nixpkgs: ref {ref}, revision {rev} (from {lockPath})"
+      let name := (nixpkgsNode lockJson |>.map fun p => p.1).getD "nixpkgs"
+      warnMultipleNixpkgs lockJson name
+      IO.println s!"nixpkgs: input {name}, ref {ref}, revision {rev} (from {lockPath})"
       let rec go (bs : List PatchBlock) (toRemove : List PatchBlock) : IO Unit :=
         match bs with
         | [] =>

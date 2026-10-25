@@ -239,6 +239,150 @@ def testNixpkgsRev : IO Unit := do
     | some ref => check (ref == "nixos-unstable") "ref extracted"
     | none => throw (IO.userError "ref not found")
 
+/-- A flake.lock (format 7) where the root inputs are `pkgs` (a nixpkgs) and
+`other`, and `other`'s own nixpkgs dependency is locked under the name
+`nixpkgs`. Only root inputs may be picked, so the revision must come from
+`pkgs`, never the transitive `nixpkgs` node. -/
+def lockWithTransitiveNixpkgs : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  \"nodes\": {",
+      "    \"other\": {",
+      "      \"inputs\": { \"nixpkgs\": \"nixpkgs\" },",
+      "      \"locked\": { \"owner\": \"someone\", \"repo\": \"other\", \"rev\": \"beefdead\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"someone\", \"repo\": \"other\", \"type\": \"github\" }",
+      "    },",
+      "    \"nixpkgs\": {",
+      "      \"locked\": { \"owner\": \"nixos\", \"repo\": \"nixpkgs\", \"rev\": \"transitive-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"ref\": \"nixos-24.11\", \"type\": \"github\" }",
+      "    },",
+      "    \"pkgs\": {",
+      "      \"locked\": { \"owner\": \"nixos\", \"repo\": \"nixpkgs\", \"rev\": \"root-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"ref\": \"nixos-unstable\", \"type\": \"github\" }",
+      "    },",
+      "    \"root\": { \"inputs\": { \"other\": \"other\", \"pkgs\": \"pkgs\" } }",
+      "  },",
+      "  \"root\": \"root\",",
+      "  \"version\": 7",
+      "}" ] ++ "\n"
+
+/-- The locked revision comes from a root input, not a transitive node that
+happens to be named `nixpkgs`. -/
+def testNixpkgsRevRootInputOnly : IO Unit := do
+  match Json.parse lockWithTransitiveNixpkgs with
+  | .error e => throw (IO.userError s!"lock parse failed: {e}")
+  | .ok j =>
+    match nixpkgsRev j with
+    | some rev => check (rev == "root-rev") "rev taken from the root input, not the transitive node"
+    | none => throw (IO.userError "rev not found")
+    match nixpkgsRef j with
+    | some ref => check (ref == "nixos-unstable") "ref taken from the root input"
+    | none => throw (IO.userError "ref not found")
+    match nixpkgsInputNames j with
+    | ["pkgs"] => pure ()
+    | ns => throw (IO.userError s!"expected only pkgs, got {ns}")
+
+/-- A flake.lock (format 7) with two root nixpkgs inputs. -/
+def lockWithTwoRootNixpkgs : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  \"nodes\": {",
+      "    \"nixpkgs\": {",
+      "      \"locked\": { \"owner\": \"nixos\", \"repo\": \"nixpkgs\", \"rev\": \"stable-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"ref\": \"nixos-24.11\", \"type\": \"github\" }",
+      "    },",
+      "    \"nixpkgs-unstable\": {",
+      "      \"locked\": { \"owner\": \"nixos\", \"repo\": \"nixpkgs\", \"rev\": \"unstable-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"ref\": \"nixos-unstable\", \"type\": \"github\" }",
+      "    },",
+      "    \"root\": { \"inputs\": { \"nixpkgs\": \"nixpkgs\", \"nixpkgs-unstable\": \"nixpkgs-unstable\" } }",
+      "  },",
+      "  \"root\": \"root\",",
+      "  \"version\": 7",
+      "}" ] ++ "\n"
+
+/-- With two root nixpkgs inputs, the one literally named `nixpkgs` wins. -/
+def testNixpkgsRevPrefersNamed : IO Unit := do
+  match Json.parse lockWithTwoRootNixpkgs with
+  | .error e => throw (IO.userError s!"lock parse failed: {e}")
+  | .ok j =>
+    match nixpkgsRev j with
+    | some rev => check (rev == "stable-rev") "the input named nixpkgs is preferred"
+    | none => throw (IO.userError "rev not found")
+    check ((nixpkgsInputNames j).length == 2) "both nixpkgs inputs are recognized"
+
+/-- A flake.lock (format 5) where root inputs are recorded as an array. -/
+def lockV5 : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  \"nodes\": {",
+      "    \"nixpkgs\": {",
+      "      \"locked\": { \"owner\": \"nixos\", \"repo\": \"nixpkgs\", \"rev\": \"array-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"ref\": \"nixos-unstable\", \"type\": \"github\" }",
+      "    },",
+      "    \"root\": { \"inputs\": [\"nixpkgs\"] }",
+      "  },",
+      "  \"root\": \"root\",",
+      "  \"version\": 5",
+      "}" ] ++ "\n"
+
+/-- Array-style root inputs (lock format 5) keep working. -/
+def testNixpkgsRevV5Array : IO Unit := do
+  match Json.parse lockV5 with
+  | .error e => throw (IO.userError s!"lock parse failed: {e}")
+  | .ok j =>
+    match nixpkgsRev j with
+    | some rev => check (rev == "array-rev") "rev from array-style root inputs"
+    | none => throw (IO.userError "rev not found")
+
+/-- A flake.lock (format 7) where the root input `nixpkgs` maps to a node
+with a different name. -/
+def lockWithRenamedNode : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  \"nodes\": {",
+      "    \"nixpkgs_2\": {",
+      "      \"locked\": { \"owner\": \"nixos\", \"repo\": \"nixpkgs\", \"rev\": \"renamed-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"NixOS\", \"repo\": \"nixpkgs\", \"ref\": \"nixos-unstable\", \"type\": \"github\" }",
+      "    },",
+      "    \"root\": { \"inputs\": { \"nixpkgs\": \"nixpkgs_2\" } }",
+      "  },",
+      "  \"root\": \"root\",",
+      "  \"version\": 7",
+      "}" ] ++ "\n"
+
+/-- The node name recorded for an input is followed, even when it differs
+from the input name. -/
+def testNixpkgsRevRenamedNode : IO Unit := do
+  match Json.parse lockWithRenamedNode with
+  | .error e => throw (IO.userError s!"lock parse failed: {e}")
+  | .ok j =>
+    match nixpkgsRev j with
+    | some rev => check (rev == "renamed-rev") "rev from the node the input maps to"
+    | none => throw (IO.userError "rev not found")
+
+/-- A flake.lock whose root input `nixpkgs` does not lock NixOS/nixpkgs (a
+fork): it is not treated as the nixpkgs to check against. -/
+def lockWithFork : String :=
+  String.intercalate "\n"
+    [ "{",
+      "  \"nodes\": {",
+      "    \"nixpkgs\": {",
+      "      \"locked\": { \"owner\": \"someone\", \"repo\": \"nixpkgs\", \"rev\": \"fork-rev\", \"type\": \"github\" },",
+      "      \"original\": { \"owner\": \"someone\", \"repo\": \"nixpkgs\", \"type\": \"github\" }",
+      "    },",
+      "    \"root\": { \"inputs\": { \"nixpkgs\": \"nixpkgs\" } }",
+      "  },",
+      "  \"root\": \"root\",",
+      "  \"version\": 7",
+      "}" ] ++ "\n"
+
+/-- A fork is not a NixOS/nixpkgs input. -/
+def testNixpkgsRevRejectsFork : IO Unit := do
+  match Json.parse lockWithFork with
+  | .error e => throw (IO.userError s!"lock parse failed: {e}")
+  | .ok j => check (nixpkgsRev j == none) "a fork is not picked as the nixpkgs input"
+
 /-- Pulls responses are classified into merged/open. -/
 def testMergedInfo : IO Unit := do
   let merged := "{ \"merged_at\": \"2024-05-01T10:00:00Z\", \"merge_commit_sha\": \"abc123\", \"state\": \"closed\" }"
@@ -421,6 +565,11 @@ def main : IO Unit := do
   testRemoveBlocks
   testRemoveBlocksNoop
   testNixpkgsRev
+  testNixpkgsRevRootInputOnly
+  testNixpkgsRevPrefersNamed
+  testNixpkgsRevV5Array
+  testNixpkgsRevRenamedNode
+  testNixpkgsRevRejectsFork
   testMergedInfo
   testCompareStatusTrimmed
   testAddSkipsWhenMerged

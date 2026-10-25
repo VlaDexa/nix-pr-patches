@@ -43,8 +43,13 @@ nixpkgs-patch-${PR_NUMBER} = {
    The PR number of a block is read from its patch url (input names can be
    arbitrary), falling back to digits in the name.
 2. Read flake.lock (parsed with `Lean.Data.Json` / `FromJson` / `ToJson`) to
-   find the locked nixpkgs revision and branch:
-   `nodes.nixpkgs.locked.rev` and `nodes.nixpkgs.original.ref`.
+   find the locked nixpkgs revision and branch. Only the root flake's own
+   inputs (`nodes.root.inputs`, in either lock format) are considered, so a
+   transitive dependency named `nixpkgs` is never picked. Among the root
+   inputs, the one whose node locks NixOS/nixpkgs is used; if several
+   qualify, the input literally named `nixpkgs` wins (and a warning is
+   printed). The revision and branch are `nodes.<input>.locked.rev` and
+   `nodes.<input>.original.ref`.
 3. For each patch PR, ask the public github api whether the PR was merged
    (`pulls/{PR}` -> `merged_at` / `merge_commit_sha`) and whether its merge
    commit is contained in the locked revision (`compare/{mergeCommit}...{rev}`:
