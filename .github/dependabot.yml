@@ -5,6 +5,9 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # nixpkgs follows lean4-nix's nixpkgs, so it must not be updated directly
+      - dependency-name: nixpkgs
 
   # GitHub Actions used in workflows
   - package-ecosystem: github-actions
