@@ -11,6 +11,14 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        nixpkgs:
+          - default # nixpkgs locked in flake.lock (via lean4-nix)
+          - nixpkgs-unstable
+          - nixos-unstable
+          - nixos-26.05 # latest stable release, bump when a new one branches off
     steps:
       - uses: actions/checkout@v7
 
@@ -22,7 +30,12 @@ jobs:
             extra-trusted-public-keys = vladexa.cachix.org-1:ThmpOQRxh92xt3RMgUA5XOEklLhW1pLQa5lPTREozO4=
 
       - name: Build
-        run: nix build --print-build-logs
+        run: |
+          override=()
+          if [[ "${{ matrix.nixpkgs }}" != default ]]; then
+            override=(--override-input nixpkgs "github:NixOS/nixpkgs/${{ matrix.nixpkgs }}")
+          fi
+          nix build --print-build-logs --builders "" "${override[@]}"
 
       - name: Smoke test
         run: ./result/bin/nix-pr-patches

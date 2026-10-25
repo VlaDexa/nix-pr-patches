@@ -1,0 +1,43 @@
+name: Weekly Nix build (latest channels)
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        nixpkgs:
+          - nixpkgs-unstable
+          - nixos-unstable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            extra-substituters = https://vladexa.cachix.org
+            extra-trusted-public-keys = vladexa.cachix.org-1:ThmpOQRxh92xt3RMgUA5XOEklLhW1pLQa5lPTREozO4=
+
+      - name: Build
+        run: |
+          override=(--override-input nixpkgs "github:NixOS/nixpkgs/${{ matrix.nixpkgs }}")
+          nix build --print-build-logs --builders "" "${override[@]}"
+
+      - name: Smoke test
+        run: ./result/bin/nix-pr-patches
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: result/bin/nix-pr-patches
