@@ -25,9 +25,11 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          extra_nix_config: |
-            extra-substituters = https://vladexa.cachix.org
-            extra-trusted-public-keys = vladexa.cachix.org-1:ThmpOQRxh92xt3RMgUA5XOEklLhW1pLQa5lPTREozO4=
+
+      - uses: cachix/cachix-action@v17
+        with:
+          name: vladexa
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
 
       - name: Build
         run: |
